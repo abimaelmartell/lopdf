@@ -670,6 +670,98 @@ impl Document {
         Ok(fonts)
     }
 
+    /// Get all fonts used by a page, including fonts in Form XObjects.
+    ///
+    /// This extends [`get_page_fonts`] by also walking the page's
+    /// `Resources/XObject` dictionary and collecting fonts from any
+    /// Form XObject (`/Subtype /Form`) it finds.  A `HashSet` guards
+    /// against infinite loops from nested/recursive XObjects.
+    pub fn get_page_fonts_with_xobjects(&self, page_id: ObjectId) -> Result<BTreeMap<Vec<u8>, &Dictionary>> {
+        fn collect_fonts_from_resources<'a>(
+            resources: &'a Dictionary, fonts: &mut BTreeMap<Vec<u8>, &'a Dictionary>, doc: &'a Document,
+        ) {
+            if let Ok(font) = resources.get(b"Font") {
+                let font_dict = match font {
+                    Object::Reference(id) => doc.get_object(*id).and_then(Object::as_dict).ok(),
+                    Object::Dictionary(dict) => Some(dict),
+                    _ => None,
+                };
+                if let Some(font_dict) = font_dict {
+                    for (name, value) in font_dict.iter() {
+                        let font = match value {
+                            Object::Reference(id) => doc.get_dictionary(*id).ok(),
+                            Object::Dictionary(dict) => Some(dict),
+                            _ => None,
+                        };
+                        if !fonts.contains_key(name) {
+                            font.map(|font| fonts.insert(name.clone(), font));
+                        }
+                    }
+                }
+            }
+        }
+
+        fn collect_xobject_fonts<'a>(
+            resources: &'a Dictionary,
+            fonts: &mut BTreeMap<Vec<u8>, &'a Dictionary>,
+            doc: &'a Document,
+            visited: &mut HashSet<ObjectId>,
+        ) {
+            let xobject_dict = match resources.get(b"XObject") {
+                Ok(Object::Reference(id)) => doc.get_object(*id).and_then(Object::as_dict).ok(),
+                Ok(Object::Dictionary(dict)) => Some(dict),
+                _ => None,
+            };
+            if let Some(xobject_dict) = xobject_dict {
+                for (_name, value) in xobject_dict.iter() {
+                    let obj_id = match value {
+                        Object::Reference(id) => Some(*id),
+                        _ => None,
+                    };
+                    if let Some(id) = obj_id {
+                        if !visited.insert(id) {
+                            continue; // already visited — prevent cycles
+                        }
+                        if let Ok(stream) = doc.get_object(id).and_then(Object::as_stream) {
+                            // Only process Form XObjects
+                            let is_form = stream
+                                .dict
+                                .get(b"Subtype")
+                                .and_then(|o| o.as_name())
+                                .is_ok_and(|n| n == b"Form");
+                            if !is_form {
+                                continue;
+                            }
+                            // Collect fonts from this Form XObject's Resources
+                            if let Ok(res) = stream.dict.get(b"Resources").and_then(Object::as_dict) {
+                                collect_fonts_from_resources(res, fonts, doc);
+                                // Recurse into nested XObjects
+                                collect_xobject_fonts(res, fonts, doc, visited);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Start with page-level fonts (includes inherited parent resources)
+        let mut fonts = self.get_page_fonts(page_id)?;
+
+        // Now walk XObjects in the page's resources
+        let (resource_dict, resource_ids) = self.get_page_resources(page_id)?;
+        let mut visited = HashSet::new();
+        if let Some(resources) = resource_dict {
+            collect_xobject_fonts(resources, &mut fonts, self, &mut visited);
+        }
+        for resource_id in resource_ids {
+            if let Ok(resources) = self.get_dictionary(resource_id) {
+                collect_xobject_fonts(resources, &mut fonts, self, &mut visited);
+            }
+        }
+
+        Ok(fonts)
+    }
+
     /// Get the PDF annotations of a page. The /Subtype of each annotation dictionary defines the
     /// annotation type (Text, Link, Highlight, Underline, Ink, Popup, Widget, etc.). The /Rect of
     /// an annotation dictionary defines its location on the page.
