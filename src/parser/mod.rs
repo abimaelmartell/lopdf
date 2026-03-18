@@ -356,7 +356,39 @@ fn _direct_objects(input: ParserInput) -> NomResult<Object> {
         hexadecimal_string,
         map(array, Object::Array),
         map(dictionary, Object::Dictionary),
+        bare_name,
     )).parse(input)
+}
+
+/// Parse a bare alphabetic token (e.g. `Code`, `H1`) as a Name object.
+///
+/// Some PDF generators (notably fpdf2) emit dictionary values like `/S Code`
+/// instead of the correct `/S /Code`. This fallback accepts such tokens so
+/// the surrounding dictionary is not silently truncated.
+///
+/// PDF keywords that can follow dictionary values (`endobj`, `stream`,
+/// `endstream`, `>>`) are excluded so they are not consumed as names.
+fn bare_name(input: ParserInput) -> NomResult<Object> {
+    let (i, token) = verify(
+        take_while1(|c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'-'),
+        |t: &ParserInput| {
+            let b = t.as_bytes();
+            // Must start with a letter (not a digit - those are numbers/refs).
+            b.first().is_some_and(|c| c.is_ascii_alphabetic())
+            // Exclude PDF keywords that could appear after a value.
+            && !matches!(
+                b,
+                b"true" | b"false" | b"null"
+                | b"obj" | b"endobj"
+                | b"stream" | b"endstream"
+                | b"xref" | b"trailer" | b"startxref"
+                | b"R"
+            )
+        },
+    ).parse(input)?;
+    let name_bytes = token.fragment().to_vec();
+    log::debug!("Parsed bare name {:?} as Name (missing leading /)", std::str::from_utf8(&name_bytes).unwrap_or("?"));
+    Ok((i, Object::Name(name_bytes)))
 }
 
 fn _direct_object(input: ParserInput) -> NomResult<Object> {
@@ -846,5 +878,40 @@ EI";
             &out.0[0].as_stream().unwrap().content,
             b"00000z0z00zzz00z0zzz0zzzEI aazazaazzzaazazzzazzz"
         )
+    }
+
+    #[test]
+    fn bare_name_in_dictionary() {
+        // Some PDF generators (e.g. fpdf2) emit `/S Code` instead of `/S /Code`.
+        // The parser should treat the bare token as a Name.
+        let input = b"<< /S Code /Type /StructElem >>";
+        let dict = tstrip(dictionary(test_span(input))).expect("should parse dict with bare name");
+        assert_eq!(
+            dict.get(b"S").unwrap().as_name().unwrap(),
+            b"Code",
+            "bare token should be parsed as Name"
+        );
+        assert_eq!(
+            dict.get(b"Type").unwrap().as_name().unwrap(),
+            b"StructElem",
+            "normal /Name should still work"
+        );
+    }
+
+    #[test]
+    fn bare_name_does_not_match_keywords() {
+        // PDF keywords must not be consumed as bare names.
+        let input = b"<< /K null /V true >>";
+        let dict = tstrip(dictionary(test_span(input))).expect("should parse keywords normally");
+        assert!(dict.get(b"K").unwrap().is_null(), "null should remain Null");
+        assert_eq!(dict.get(b"V").unwrap().as_bool().unwrap(), true, "true should remain Boolean");
+    }
+
+    #[test]
+    fn bare_name_alphanumeric() {
+        // Bare names with digits like H1, H2 should work.
+        let input = b"<< /S H1 >>";
+        let dict = tstrip(dictionary(test_span(input))).expect("should parse H1 as bare name");
+        assert_eq!(dict.get(b"S").unwrap().as_name().unwrap(), b"H1");
     }
 }
