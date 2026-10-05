@@ -1,0 +1,31 @@
+tests/page_tree_broken_kid.rs
+  s_d30bfbdd172e87::t_49fe755410bd5f 31
+  s_a2a0b254789308::t_bb2e090e90a634 48
+  s_a2a0b254789308::t_9f434cd094c4a8 1-30,32-47,49-127
+src/document.rs
+  s_a2a0b254789308::t_ab43a1ecfb0a14 983-985,988,995-1005
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f6902c3f99a5e443146513ee37390a8f871e12b9",
+  "prompts": {},
+  "sessions": {
+    "s_a2a0b254789308": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6902b7e4-4455-4c0b-a381-8611128939c3",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Abimael Martell <1450169+abimaelmartell@users.noreply.github.com>"
+    },
+    "s_d30bfbdd172e87": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "16a3d952-6f4c-44a1-952d-9745ac29e4f6",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Abimael Martell <1450169+abimaelmartell@users.noreply.github.com>"
+    }
+  }
+}
